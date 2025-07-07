@@ -5,14 +5,21 @@ import smtplib
 import ssl
 import os
 import random
+import json
 
 # Firebase Admin SDK
-from firebase_admin import auth, credentials, initialize_app
 import firebase_admin
+from firebase_admin import auth, credentials
 
+# Secure Firebase Init
 if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-adminsdk.json")  # <- your Firebase Admin SDK path
-    firebase_admin.initialize_app(cred)
+    try:
+        firebase_json = os.getenv("FIREBASE_CREDENTIALS")
+        cred_dict = json.loads(firebase_json)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        raise Exception(f"❌ Firebase initialization failed: {str(e)}")
 
 app = FastAPI()
 
@@ -25,8 +32,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SMTP_EMAIL = os.getenv("SMTP_EMAIL", "rakeshpoojary850@gmail.com")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "zmvvppmowvnnurcp")
+SMTP_EMAIL = os.getenv("SMTP_EMAIL")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 otp_store = {}
 
@@ -37,35 +44,21 @@ class PasswordResetRequest(BaseModel):
     email: str
     new_password: str
 
-def send_otp_email_for_registration(email: str, otp: str):
-    message = f"""Subject: Welcome to Nike\n\nUse this OTP to complete your registration: {otp}"""
+def send_email(subject, body, to_email):
+    message = f"Subject: {subject}\n\n{body}"
     try:
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
             server.login(SMTP_EMAIL, SMTP_PASSWORD)
-            server.sendmail(SMTP_EMAIL, email, message)
-        return {"success": True, "message": "OTP sent for registration"}
+            server.sendmail(SMTP_EMAIL, to_email, message)
+        return {"success": True, "message": f"Email sent to {to_email}"}
     except Exception as e:
-        return {"success": False, "error": f"Email sending failed (registration): {str(e)}"}
-
-
-def send_otp_email_for_reset(email: str, otp: str):
-    message = f"""Subject: Nike Password Reset\n\nUse this OTP to reset your password: {otp}"""
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-            server.login(SMTP_EMAIL, SMTP_PASSWORD)
-            server.sendmail(SMTP_EMAIL, email, message)
-        return {"success": True, "message": "OTP sent for password reset"}
-    except Exception as e:
-        return {"success": False, "error": f"Email sending failed (reset): {str(e)}"}
-
+        return {"success": False, "error": str(e)}
 
 @app.get("/")
 def root():
     return {"message": "✅ OTP Server is running!"}
 
-# ✅ REGISTRATION OTP: only if not already registered
 @app.post("/send-otp")
 async def send_registration_otp(data: OTPRequest):
     try:
@@ -74,16 +67,15 @@ async def send_registration_otp(data: OTPRequest):
     except firebase_admin.auth.UserNotFoundError:
         otp = str(random.randint(100000, 999999))
         otp_store[data.email] = otp
-        return send_otp_email_for_registration(data.email, otp)
+        return send_email("Welcome to Nike", f"Use this OTP to complete registration: {otp}", data.email)
     except Exception as e:
         return {"success": False, "error": f"Firebase error: {str(e)}"}
 
-# ✅ LOGIN / RESET OTP: always send, don't check Firebase
 @app.post("/send-reset-otp")
 async def send_reset_otp(data: OTPRequest):
     otp = str(random.randint(100000, 999999))
     otp_store[data.email] = otp
-    return send_otp_email_for_reset(data.email, otp)
+    return send_email("Nike Password Reset", f"Use this OTP to reset your password: {otp}", data.email)
 
 @app.post("/verify-otp")
 async def verify_otp(request: Request):
