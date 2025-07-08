@@ -5,37 +5,38 @@ import smtplib
 import ssl
 import os
 import json
-import base64
 import random
 import logging
+import base64
 from firebase_admin import auth, credentials, initialize_app
 import firebase_admin
 
-# ✅ Logger setup
+# ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nike-otp-backend")
 
-# ✅ Firebase initialization (Render-safe with base64)
+# ✅ Firebase initialization using B64 encoded JSON
 try:
-    if not firebase_admin._apps:
-        firebase_b64 = os.getenv("FIREBASE_CONFIG_B64")
-        if not firebase_b64:
-            raise Exception("FIREBASE_CONFIG_B64 is missing in environment!")
+    firebase_b64 = os.getenv("FIREBASE_CONFIG_B64")
+    if not firebase_b64:
+        raise Exception("FIREBASE_CONFIG_B64 environment variable is missing!")
 
-        decoded_json = base64.b64decode(firebase_b64).decode("utf-8")
-        config = json.loads(decoded_json)
-        config["private_key"] = config["private_key"].replace("\\n", "\n")
-        cred = credentials.Certificate(config)
-        initialize_app(cred)
-        logger.info("✅ Firebase initialized successfully.")
+    decoded = base64.b64decode(firebase_b64).decode("utf-8")
+    cred_dict = json.loads(decoded)
+    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+
+    cred = credentials.Certificate(cred_dict)
+    initialize_app(cred)
+    logger.info("✅ Firebase initialized.")
+
 except Exception as e:
     logger.error(f"❌ Firebase initialization failed: {str(e)}")
     raise Exception(f"❌ Firebase initialization failed: {str(e)}")
 
-# ✅ FastAPI App
+# ✅ FastAPI app
 app = FastAPI()
 
-# ✅ CORS Settings (Local + Deployed Frontend)
+# ✅ CORS config
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -47,16 +48,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Environment SMTP credentials
+# ✅ SMTP setup
 SMTP_EMAIL = os.getenv("SMTP_EMAIL")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 if not SMTP_EMAIL or not SMTP_PASSWORD:
     logger.warning("⚠️ SMTP credentials are missing!")
 
-# ✅ In-Memory OTP Storage
+# ✅ OTP store (in-memory)
 otp_store = {}
 
-# ✅ Data Models
+# ✅ Pydantic models
 class OTPRequest(BaseModel):
     email: str
 
@@ -64,7 +65,7 @@ class PasswordResetRequest(BaseModel):
     email: str
     new_password: str
 
-# ✅ Email Sender
+# ✅ Email sender
 def send_email(subject: str, body: str, recipient: str):
     try:
         message = f"Subject: {subject}\n\n{body}"
@@ -79,7 +80,6 @@ def send_email(subject: str, body: str, recipient: str):
         return {"success": False, "error": str(e)}
 
 # ✅ Routes
-
 @app.get("/")
 def root():
     logger.info("✅ Server is up")
@@ -143,9 +143,3 @@ async def reset_password(data: PasswordResetRequest):
     except Exception as e:
         logger.error(f"❌ Password update failed: {str(e)}")
         return {"success": False, "error": f"Update failed: {str(e)}"}
-
-# ✅ Local run (Optional)
-if __name__ == "__main__":
-    import uvicorn
-    logger.info("🚀 Running FastAPI on http://localhost:8000")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
