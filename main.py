@@ -1,63 +1,50 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import smtplib
 import ssl
 import os
-import json
 import random
-import logging
-import base64
+
+# Firebase Admin SDK
 from firebase_admin import auth, credentials, initialize_app
 import firebase_admin
 
-from dotenv import load_dotenv
-load_dotenv()
+# ✅ Initialize Firebase Admin SDK only once
+if not firebase_admin._apps:
+    cred = credentials.Certificate("firebase-adminsdk.json")  # Make sure this JSON exists in root
+    firebase_admin.initialize_app(cred)
 
-
-# ✅ Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nike-otp-backend")
-
-# ✅ Firebase initialization using FIREBASE_CONFIG_B64
-try:
-    firebase_b64 = os.getenv("FIREBASE_CONFIG_B64")
-    if not firebase_b64:
-        raise Exception("❌ FIREBASE_CONFIG_B64 is not set in environment.")
-
-    decoded = base64.b64decode(firebase_b64).decode("utf-8")
-    cred_dict = json.loads(decoded)
-    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
-
-    cred = credentials.Certificate(cred_dict)
-    initialize_app(cred)
-    logger.info("✅ Firebase initialized using FIREBASE_CONFIG_B64")
-except Exception as e:
-    logger.error(f"❌ Firebase initialization failed: {str(e)}")
-    raise Exception(f"❌ Firebase initialization failed: {str(e)}")
-
-# ✅ FastAPI app
+# ✅ Create app before any decorator
 app = FastAPI()
 
-# ✅ CORS config
+# ✅ CORS setup: Allow Vercel + Render
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "https://nike-access-x.vercel.app"
+        "https://nike-access-x-9bsk.vercel.app",
+        "https://nikeaccessx.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ SMTP setup
-SMTP_EMAIL = os.getenv("SMTP_EMAIL")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-if not SMTP_EMAIL or not SMTP_PASSWORD:
-    logger.warning("⚠️ SMTP credentials are missing!")
+# ✅ Manual OPTIONS handler to fix Render CORS issue
+@app.options("/{rest_of_path:path}")
+async def preflight_handler():
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, GET, OPTIONS, PUT, DELETE",
+        "Access-Control-Allow-Headers": "*",
+    }
+    return JSONResponse(status_code=204, content=None, headers=headers)
 
-# ✅ OTP store
+# ✅ Email SMTP credentials (use env vars in production)
+SMTP_EMAIL = os.getenv("SMTP_EMAIL", "rakeshpoojary850@gmail.com")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "zmvvppmowvnnurcp")
+
 otp_store = {}
 
 # ✅ Pydantic models
@@ -68,81 +55,80 @@ class PasswordResetRequest(BaseModel):
     email: str
     new_password: str
 
-# ✅ Email sender
-def send_email(subject: str, body: str, recipient: str):
+# ✅ OTP Email sender for registration
+def send_otp_email_for_registration(email: str, otp: str):
+    message = f"""Subject: Welcome to Nike\n\nUse this OTP to complete your registration: {otp}"""
     try:
-        message = f"Subject: {subject}\n\n{body}"
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
             server.login(SMTP_EMAIL, SMTP_PASSWORD)
-            server.sendmail(SMTP_EMAIL, recipient, message)
-        logger.info(f"📨 Email sent to {recipient}")
-        return {"success": True, "message": "Email sent"}
+            server.sendmail(SMTP_EMAIL, email, message)
+        return {"success": True, "message": "OTP sent for registration"}
     except Exception as e:
-        logger.error(f"❌ Email failed: {str(e)}")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": f"Email sending failed (registration): {str(e)}"}
 
-# ✅ Routes
+# ✅ OTP Email sender for password reset
+def send_otp_email_for_reset(email: str, otp: str):
+    message = f"""Subject: Nike Password Reset\n\nUse this OTP to reset your password: {otp}"""
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(SMTP_EMAIL, SMTP_PASSWORD)
+            server.sendmail(SMTP_EMAIL, email, message)
+        return {"success": True, "message": "OTP sent for password reset"}
+    except Exception as e:
+        return {"success": False, "error": f"Email sending failed (reset): {str(e)}"}
+
+# ✅ Home route
 @app.get("/")
 def root():
-    logger.info("✅ Server is up")
     return {"message": "✅ OTP Server is running!"}
 
+# ✅ Send OTP (registration)
 @app.post("/send-otp")
 async def send_registration_otp(data: OTPRequest):
-    logger.info(f"📩 Registration OTP requested for: {data.email}")
     try:
         auth.get_user_by_email(data.email)
         return {"success": False, "error": "Email is already registered"}
     except firebase_admin.auth.UserNotFoundError:
         otp = str(random.randint(100000, 999999))
         otp_store[data.email] = otp
-        logger.info(f"🔐 OTP for {data.email}: {otp}")
-        return send_email(
-            subject="Nike Registration OTP",
-            body=f"Use this OTP to complete your registration: {otp}",
-            recipient=data.email
-        )
+        return send_otp_email_for_registration(data.email, otp)
     except Exception as e:
-        logger.error(f"🔥 Firebase error: {str(e)}")
         return {"success": False, "error": f"Firebase error: {str(e)}"}
 
+# ✅ Send OTP (reset)
 @app.post("/send-reset-otp")
 async def send_reset_otp(data: OTPRequest):
-    logger.info(f"📩 Reset OTP requested for: {data.email}")
     otp = str(random.randint(100000, 999999))
     otp_store[data.email] = otp
-    logger.info(f"🔐 Reset OTP for {data.email}: {otp}")
-    return send_email(
-        subject="Nike Password Reset",
-        body=f"Use this OTP to reset your password: {otp}",
-        recipient=data.email
-    )
+    return send_otp_email_for_reset(data.email, otp)
 
+# ✅ Verify OTP
 @app.post("/verify-otp")
 async def verify_otp(request: Request):
-    data = await request.json()
-    email = data.get("email")
-    otp_input = data.get("otp")
-    logger.info(f"🔍 Verifying OTP for {email}")
+    body = await request.json()
+    email = body.get("email")
+    otp_input = body.get("otp")
     if email in otp_store and otp_store[email] == otp_input:
         del otp_store[email]
-        logger.info(f"✅ OTP verified for {email}")
         return {"verified": True}
-    logger.warning(f"❌ OTP verification failed for {email}")
     return {"verified": False}
 
+# ✅ Reset password
 @app.post("/reset-password")
 async def reset_password(data: PasswordResetRequest):
-    logger.info(f"🔁 Resetting password for {data.email}")
     try:
         user = auth.get_user_by_email(data.email)
         auth.update_user(user.uid, password=data.new_password)
-        logger.info(f"✅ Password updated for {data.email}")
         return {"success": True, "message": "Password updated successfully"}
     except firebase_admin.auth.UserNotFoundError:
-        logger.warning(f"❌ Email not found: {data.email}")
         return {"success": False, "error": "Email not found"}
     except Exception as e:
-        logger.error(f"❌ Password update failed: {str(e)}")
-        return {"success": False, "error": f"Update failed: {str(e)}"}
+        return {"success": False, "error": f"Password update failed: {str(e)}"}
+
+# ✅ Local dev server
+if __name__ == "__main__":
+    import uvicorn
+    print("🚀 OTP Server is running at http://0.0.0.0:8000")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
