@@ -11,6 +11,10 @@ import base64
 from firebase_admin import auth, credentials, initialize_app
 import firebase_admin
 
+from dotenv import load_dotenv
+load_dotenv()
+
+
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nike-otp-backend")
