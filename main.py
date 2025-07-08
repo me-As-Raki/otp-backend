@@ -15,11 +15,11 @@ import firebase_admin
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nike-otp-backend")
 
-# ✅ Firebase initialization using B64 encoded JSON
+# ✅ Firebase initialization using FIREBASE_CONFIG_B64
 try:
     firebase_b64 = os.getenv("FIREBASE_CONFIG_B64")
     if not firebase_b64:
-        raise Exception("FIREBASE_CONFIG_B64 environment variable is missing!")
+        raise Exception("❌ FIREBASE_CONFIG_B64 is not set in environment.")
 
     decoded = base64.b64decode(firebase_b64).decode("utf-8")
     cred_dict = json.loads(decoded)
@@ -27,8 +27,7 @@ try:
 
     cred = credentials.Certificate(cred_dict)
     initialize_app(cred)
-    logger.info("✅ Firebase initialized.")
-
+    logger.info("✅ Firebase initialized using FIREBASE_CONFIG_B64")
 except Exception as e:
     logger.error(f"❌ Firebase initialization failed: {str(e)}")
     raise Exception(f"❌ Firebase initialization failed: {str(e)}")
@@ -54,7 +53,7 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 if not SMTP_EMAIL or not SMTP_PASSWORD:
     logger.warning("⚠️ SMTP credentials are missing!")
 
-# ✅ OTP store (in-memory)
+# ✅ OTP store
 otp_store = {}
 
 # ✅ Pydantic models
